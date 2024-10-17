@@ -31,7 +31,6 @@ if (fs.existsSync(DATA_FILE)) {
   }
 }
 
-// Helper function to save the lists object to the JSON file
 const saveToFile = () => {
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(lists, null, 2));
@@ -40,7 +39,6 @@ const saveToFile = () => {
   }
 };
 
-// Create a new list
 app.post("/api/create-list", (req, res) => {
   const { name } = req.body;
 
@@ -48,15 +46,14 @@ app.post("/api/create-list", (req, res) => {
     return res.status(400).send({ error: "List name is required" });
   }
 
-  const id = uuidv4(); // Generate a unique ID
-  lists[id] = { name, items: [] }; // Initialize the list with a name and empty items
+  const id = uuidv4();
+  lists[id] = { name, items: [] };
 
-  saveToFile(); // Save the updated lists to the file
+  saveToFile();
 
-  res.status(201).send({ id }); // Return the generated ID to the frontend
+  res.status(201).send({ id });
 });
 
-// Get list details by ID
 app.get("/api/lists/:id", (req, res) => {
   const id = req.params.id;
   if (!lists[id]) {
@@ -66,7 +63,6 @@ app.get("/api/lists/:id", (req, res) => {
   res.json({ name: lists[id].name, items: lists[id].items });
 });
 
-// Add an item to the list
 app.post("/api/lists/:id", (req, res) => {
   const id = req.params.id;
   const { item } = req.body;
@@ -79,13 +75,39 @@ app.post("/api/lists/:id", (req, res) => {
     return res.status(404).send({ error: "List not found" });
   }
 
-  lists[id].items.push(item); // Add the new item to the list
-  saveToFile(); // Save the updated list to the file
+  lists[id].items.push(item);
+  saveToFile();
+
+  io.to(id).emit("listUpdated", lists[id].items);
+  res.status(201).send({ success: true });
+});
+
+app.delete("/api/lists/:id/item", (req, res) => {
+  const { id } = req.params;
+  const { item } = req.body;
+
+  if (!item || item.trim() === "") {
+    return res.status(400).send({ error: "Item is required" });
+  }
+
+  if (!lists[id]) {
+    return res.status(404).send({ error: "List not found" });
+  }
+
+  // Remove the item from the list
+  const itemIndex = lists[id].items.indexOf(item);
+  if (itemIndex === -1) {
+    return res.status(404).send({ error: "Item not found" });
+  }
+
+  // Remove the item and save the updated list
+  lists[id].items.splice(itemIndex, 1);
+  saveToFile();
 
   // Notify connected clients about the update
   io.to(id).emit("listUpdated", lists[id].items);
 
-  res.status(201).send({ success: true });
+  res.status(200).send({ success: true });
 });
 
 // WebSocket for real-time updates
