@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://mario-dev.eu"],
+    origin: ["http://localhost:5173", "https://list-app-two.vercel.app"],
     methods: ["GET", "POST"],
   },
 });
