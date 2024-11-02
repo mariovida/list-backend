@@ -1,10 +1,10 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
-const fs = require("fs");
-const path = require("path");
 const { Server } = require("socket.io");
-const { v4: uuidv4 } = require("uuid");
+const mysql = require("mysql2/promise"); // Use MySQL with async/await
+const { v4: uuidv4 } = require("uuid"); // For generating UUIDs
 
 const app = express();
 const server = http.createServer(app);
@@ -47,105 +47,142 @@ const io = new Server(server, {
   },
 });
 
-const DATA_FILE = path.join(__dirname, "lists.json");
-
-let lists = {};
-if (fs.existsSync(DATA_FILE)) {
-  try {
-    const data = fs.readFileSync(DATA_FILE, "utf-8");
-    lists = JSON.parse(data);
-  } catch (error) {
-    console.error("Error reading data file:", error);
-    lists = {};
-  }
-}
-
-const saveToFile = () => {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(lists, null, 2));
-  } catch (error) {
-    console.error("Error saving data to file:", error);
-  }
-};
+// MySQL Connection
+const db = mysql.createPool({
+  host: process.env.DATABASE_HOST,
+  user: process.env.DATABASE_USER,
+  password: process.env.DATABASE_PASSWORD,
+  database: process.env.DATABASE_DB,
+});
 
 // API Endpoints
-app.post("/api/create-list", (req, res) => {
+app.post("/api/create-list", async (req, res) => {
   const { name } = req.body;
 
   if (!name || name.trim() === "") {
     return res.status(400).send({ error: "List name is required" });
   }
 
-  const id = uuidv4();
-  lists[id] = { name, items: [] };
-  saveToFile();
-
-  res.status(201).send({ id });
-});
-
-app.get("/api/lists/:id", (req, res) => {
-  const id = req.params.id;
-  if (!lists[id]) {
-    return res.status(404).send({ error: "List not found" });
+  const uuid = uuidv4();
+  try {
+    const [result] = await db.query(
+      "INSERT INTO lists (uuid, name, created_at) VALUES (?, ?, NOW())",
+      [uuid, name]
+    );
+    res.status(201).send({ id: result.insertId, uuid });
+  } catch (error) {
+    console.error("Error creating list:", error);
+    res.status(500).send({ error: "Error creating list" });
   }
-
-  res.json({ name: lists[id].name, items: lists[id].items });
 });
 
-app.post("/api/lists/:id", (req, res) => {
-  const id = req.params.id;
+app.get("/api/lists/:uuid", async (req, res) => {
+  const { uuid } = req.params;
+  try {
+    const [listRows] = await db.query("SELECT * FROM lists WHERE uuid = ?", [
+      uuid,
+    ]);
+    if (listRows.length === 0) {
+      return res.status(404).send({ error: "List not found" });
+    }
+
+    const [itemRows] = await db.query("SELECT * FROM items WHERE list_id = ?", [
+      listRows[0].id,
+    ]);
+
+    res.json({
+      list: {
+        id: listRows[0].id,
+        uuid: listRows[0].uuid,
+        name: listRows[0].name,
+        created_at: listRows[0].created_at,
+      },
+      items: itemRows.map((item) => ({
+        id: item.id,
+        item: item.item,
+        created_at: item.created_at,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching list:", error);
+    res.status(500).send({ error: "Error fetching list" });
+  }
+});
+
+app.post("/api/lists/:uuid", async (req, res) => {
+  const { uuid } = req.params;
   const { item } = req.body;
 
   if (!item || item.trim() === "") {
-    return res.status(400).send({ error: "Item is required" });
+    return res.status(400).send({ error: "Item content is required" });
   }
 
-  if (!lists[id]) {
-    return res.status(404).send({ error: "List not found" });
+  try {
+    const [listRows] = await db.query("SELECT * FROM lists WHERE uuid = ?", [
+      uuid,
+    ]);
+    if (listRows.length === 0) {
+      return res.status(404).send({ error: "List not found" });
+    }
+
+    await db.query(
+      "INSERT INTO items (list_id, item, created_at) VALUES (?, ?, NOW())",
+      [listRows[0].id, item]
+    );
+
+    const [updatedItems] = await db.query(
+      "SELECT id, item, created_at FROM items WHERE list_id = ?",
+      [listRows[0].id]
+    );
+
+    io.to(uuid).emit("listUpdated", updatedItems);
+    res.status(201).send({ success: true });
+  } catch (error) {
+    console.error("Error adding item:", error);
+    res.status(500).send({ error: "Error adding item" });
   }
-
-  lists[id].items.push(item);
-  saveToFile();
-
-  io.to(id).emit("listUpdated", lists[id].items);
-  res.status(201).send({ success: true });
 });
 
-app.delete("/api/lists/:id/item", (req, res) => {
-  const { id } = req.params;
-  const { item } = req.body;
+app.delete("/api/lists/:uuid/items/:itemId", async (req, res) => {
+  const { uuid, itemId } = req.params;
 
-  if (!item || item.trim() === "") {
-    return res.status(400).send({ error: "Item is required" });
+  try {
+    const [listRows] = await db.query("SELECT id FROM lists WHERE uuid = ?", [
+      uuid,
+    ]);
+    if (listRows.length === 0) {
+      return res.status(404).send({ error: "List not found" });
+    }
+
+    const [deleteResult] = await db.query(
+      "DELETE FROM items WHERE id = ? AND list_id = ?",
+      [itemId, listRows[0].id]
+    );
+
+    if (deleteResult.affectedRows === 0) {
+      return res.status(404).send({ error: "Item not found" });
+    }
+
+    const [updatedItems] = await db.query(
+      "SELECT id, content, created_at FROM items WHERE list_id = ?",
+      [listRows[0].id]
+    );
+
+    io.to(uuid).emit("listUpdated", updatedItems);
+    res.status(200).send({ success: true });
+  } catch (error) {
+    console.error("Error deleting item:", error);
+    res.status(500).send({ error: "Error deleting item" });
   }
-
-  if (!lists[id]) {
-    return res.status(404).send({ error: "List not found" });
-  }
-
-  const itemIndex = lists[id].items.indexOf(item);
-  if (itemIndex === -1) {
-    return res.status(404).send({ error: "Item not found" });
-  }
-
-  lists[id].items.splice(itemIndex, 1);
-  saveToFile();
-
-  io.to(id).emit("listUpdated", lists[id].items);
-  res.status(200).send({ success: true });
 });
 
 // WebSocket for real-time updates
 io.on("connection", (socket) => {
   console.log("A user connected");
 
-  socket.on("joinList", (listId) => {
-    if (lists[listId]) {
-      socket.join(listId);
-      console.log(`User joined list: ${listId}`);
-    } else {
-      console.log(`Attempted to join non-existent list: ${listId}`);
-    }
+  socket.on("joinList", (uuid) => {
+    socket.join(uuid);
+    console.log(`User joined list: ${uuid}`);
   });
 
   socket.on("disconnect", () => {
