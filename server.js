@@ -8,19 +8,47 @@ const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://list-app-two.vercel.app",
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    next();
+  } else {
+    res.status(403).send({ error: "CORS error: Origin not allowed" });
+  }
+});
+
+app.use(express.json());
+
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://list-app-two.vercel.app"],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`CORS error: Origin ${origin} not allowed`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
-app.use(cors());
-app.use(express.json());
-
 const DATA_FILE = path.join(__dirname, "lists.json");
 
-// Load existing data from the JSON file, or initialize an empty object if the file doesn't exist
 let lists = {};
 if (fs.existsSync(DATA_FILE)) {
   try {
@@ -28,6 +56,7 @@ if (fs.existsSync(DATA_FILE)) {
     lists = JSON.parse(data);
   } catch (error) {
     console.error("Error reading data file:", error);
+    lists = {};
   }
 }
 
@@ -39,6 +68,7 @@ const saveToFile = () => {
   }
 };
 
+// API Endpoints
 app.post("/api/create-list", (req, res) => {
   const { name } = req.body;
 
@@ -48,7 +78,6 @@ app.post("/api/create-list", (req, res) => {
 
   const id = uuidv4();
   lists[id] = { name, items: [] };
-
   saveToFile();
 
   res.status(201).send({ id });
@@ -94,19 +123,15 @@ app.delete("/api/lists/:id/item", (req, res) => {
     return res.status(404).send({ error: "List not found" });
   }
 
-  // Remove the item from the list
   const itemIndex = lists[id].items.indexOf(item);
   if (itemIndex === -1) {
     return res.status(404).send({ error: "Item not found" });
   }
 
-  // Remove the item and save the updated list
   lists[id].items.splice(itemIndex, 1);
   saveToFile();
 
-  // Notify connected clients about the update
   io.to(id).emit("listUpdated", lists[id].items);
-
   res.status(200).send({ success: true });
 });
 
