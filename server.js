@@ -5,7 +5,6 @@ const http = require("http");
 const { Server } = require("socket.io");
 const mysql = require("mysql2/promise"); // Use MySQL with async/await
 const { v4: uuidv4 } = require("uuid"); // For generating UUIDs
-const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
@@ -191,13 +190,5 @@ io.on("connection", (socket) => {
   });
 });
 
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "client", "build")));
-
-  app.get("*", (req, res) => {
-    res.sendFile(path.join(__dirname, "client", "build", "index.html"));
-  });
-}
-
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
