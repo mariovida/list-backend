@@ -100,6 +100,7 @@ app.get("/api/lists/:uuid", async (req, res) => {
       items: itemRows.map((item) => ({
         id: item.id,
         item: item.item,
+        checked: item.checked,
         created_at: item.created_at,
       })),
     });
@@ -173,6 +174,40 @@ app.delete("/api/lists/:uuid/items/:itemId", async (req, res) => {
   } catch (error) {
     console.error("Error deleting item:", error);
     res.status(500).send({ error: "Error deleting item" });
+  }
+});
+
+app.put("/api/lists/:uuid/items/:itemId", async (req, res) => {
+  const { uuid, itemId } = req.params;
+  const { checked } = req.body;
+
+  try {
+    const [listRows] = await db.query("SELECT id FROM lists WHERE uuid = ?", [
+      uuid,
+    ]);
+    if (listRows.length === 0) {
+      return res.status(404).send({ error: "List not found" });
+    }
+
+    const [updateResult] = await db.query(
+      "UPDATE items SET checked = ? WHERE id = ? AND list_id = ?",
+      [checked, itemId, listRows[0].id]
+    );
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(404).send({ error: "Item not found" });
+    }
+
+    const [updatedItems] = await db.query(
+      "SELECT id, item, created_at, checked FROM items WHERE list_id = ?",
+      [listRows[0].id]
+    );
+
+    io.to(uuid).emit("listUpdated", updatedItems);
+    res.status(200).send({ success: true });
+  } catch (error) {
+    console.error("Error updating item:", error);
+    res.status(500).send({ error: "Error updating item" });
   }
 });
 
