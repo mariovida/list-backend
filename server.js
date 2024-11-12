@@ -165,7 +165,7 @@ app.delete("/api/lists/:uuid/items/:itemId", async (req, res) => {
     }
 
     const [updatedItems] = await db.query(
-      "SELECT id, item, created_at FROM items WHERE list_id = ?",
+      "SELECT id, item, checked, created_at FROM items WHERE list_id = ?",
       [listRows[0].id]
     );
 
