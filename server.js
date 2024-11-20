@@ -5,6 +5,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const mysql = require("mysql2/promise");
 const { v4: uuidv4 } = require("uuid");
+const axios = require("axios");
 
 const app = express();
 const server = http.createServer(app);
@@ -270,6 +271,17 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("A user disconnected");
   });
+});
+
+setInterval(() => {
+  const url = `http://localhost:3000/api/heartbeat`;
+  axios
+    .get(url)
+    .then(() => console.log("Self-ping successful"))
+    .catch((err) => console.error("Self-ping failed:", err.message));
+}, 2 * 60 * 1000);
+app.get("/api/heartbeat", (req, res) => {
+  res.send("Server is active");
 });
 
 const PORT = 3000;
