@@ -3,8 +3,8 @@ const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
-const mysql = require("mysql2/promise"); // Use MySQL with async/await
-const { v4: uuidv4 } = require("uuid"); // For generating UUIDs
+const mysql = require("mysql2/promise");
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const server = http.createServer(app);
@@ -47,13 +47,21 @@ const io = new Server(server, {
   },
 });
 
-// MySQL Connection
-const db = mysql.createPool({
-  host: process.env.DATABASE_HOST,
-  user: process.env.DATABASE_USER,
-  password: process.env.DATABASE_PASSWORD,
-  database: process.env.DATABASE_DB,
+let db = mysql.createPool({
+  host: process.env.TEST_DATABASE_HOST,
+  user: process.env.TEST_DATABASE_USER,
+  password: process.env.TEST_DATABASE_PASSWORD,
+  database: process.env.TEST_DATABASE_DB,
 });
+
+if (process.env.ENVIRONMENT === "production") {
+  db = mysql.createPool({
+    host: process.env.DATABASE_HOST,
+    user: process.env.DATABASE_USER,
+    password: process.env.DATABASE_PASSWORD,
+    database: process.env.DATABASE_DB,
+  });
+}
 
 // API Endpoints
 app.post("/api/create-list", async (req, res) => {
@@ -101,6 +109,7 @@ app.get("/api/lists/:uuid", async (req, res) => {
         id: item.id,
         item: item.item,
         checked: item.checked,
+        quantity: item.quantity,
         created_at: item.created_at,
       })),
     });
@@ -112,7 +121,7 @@ app.get("/api/lists/:uuid", async (req, res) => {
 
 app.post("/api/lists/:uuid", async (req, res) => {
   const { uuid } = req.params;
-  const { item } = req.body;
+  const { item, quantity } = req.body;
 
   if (!item || item.trim() === "") {
     return res.status(400).send({ error: "Item content is required" });
@@ -127,12 +136,12 @@ app.post("/api/lists/:uuid", async (req, res) => {
     }
 
     await db.query(
-      "INSERT INTO items (list_id, item, created_at) VALUES (?, ?, NOW())",
-      [listRows[0].id, item]
+      "INSERT INTO items (list_id, item, quantity, checked, created_at) VALUES (?, ?, ?, false, NOW())",
+      [listRows[0].id, item, quantity]
     );
 
     const [updatedItems] = await db.query(
-      "SELECT id, item, checked, created_at FROM items WHERE list_id = ?",
+      "SELECT id, item, quantity, checked, created_at FROM items WHERE list_id = ?",
       [listRows[0].id]
     );
 
@@ -165,7 +174,7 @@ app.delete("/api/lists/:uuid/items/:itemId", async (req, res) => {
     }
 
     const [updatedItems] = await db.query(
-      "SELECT id, item, checked, created_at FROM items WHERE list_id = ?",
+      "SELECT id, item, quantity, checked, created_at FROM items WHERE list_id = ?",
       [listRows[0].id]
     );
 
@@ -199,7 +208,7 @@ app.put("/api/lists/:uuid/items/:itemId", async (req, res) => {
     }
 
     const [updatedItems] = await db.query(
-      "SELECT id, item, created_at, checked FROM items WHERE list_id = ?",
+      "SELECT id, item, created_at, quantity, checked FROM items WHERE list_id = ?",
       [listRows[0].id]
     );
 
@@ -208,6 +217,44 @@ app.put("/api/lists/:uuid/items/:itemId", async (req, res) => {
   } catch (error) {
     console.error("Error updating item:", error);
     res.status(500).send({ error: "Error updating item" });
+  }
+});
+
+app.put("/api/lists/:uuid/items/:itemId/quantity", async (req, res) => {
+  const { uuid, itemId } = req.params;
+  const { quantity } = req.body;
+
+  if (quantity < 0) {
+    return res.status(400).send({ error: "Quantity cannot be negative" });
+  }
+
+  try {
+    const [listRows] = await db.query("SELECT id FROM lists WHERE uuid = ?", [
+      uuid,
+    ]);
+    if (listRows.length === 0) {
+      return res.status(404).send({ error: "List not found" });
+    }
+
+    const [updateResult] = await db.query(
+      "UPDATE items SET quantity = ? WHERE id = ? AND list_id = ?",
+      [quantity, itemId, listRows[0].id]
+    );
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(404).send({ error: "Item not found" });
+    }
+
+    const [updatedItems] = await db.query(
+      "SELECT id, item, checked, quantity, created_at FROM items WHERE list_id = ?",
+      [listRows[0].id]
+    );
+
+    io.to(uuid).emit("listUpdated", updatedItems);
+    res.status(200).send({ success: true });
+  } catch (error) {
+    console.error("Error updating item quantity:", error);
+    res.status(500).send({ error: "Error updating item quantity" });
   }
 });
 
